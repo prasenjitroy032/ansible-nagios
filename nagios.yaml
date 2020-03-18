@@ -1,0 +1,244 @@
+---
+- hosts: all
+  vars:
+    nagios_version: '4.4.5'
+    nagios_plugin_version: '2.2.1'
+    packages_ubuntu:
+      - autoconf 
+      - gcc 
+      - libc6 
+      - make 
+      - wget 
+      - unzip 
+      - apache2 
+      - php 
+      - libapache2-mod-php7.2 
+      - libgd-dev
+      - libmcrypt-dev 
+      - libssl-dev 
+      - bc 
+      - gawk 
+      - dc 
+      - build-essential 
+      - snmp 
+      - libnet-snmp-perl 
+      - gettext
+    packages_centos:
+      - gcc
+      - glibc 
+      - glibc-common 
+      - wget 
+      - make
+      - getext
+      - unzip 
+      - httpd 
+      - php
+      - gd 
+      - gd-devel
+      - perl 
+      - postfix
+      - automake
+      - autoconf
+      - openssl-devel
+      - net-snmp
+      - net-snmp-utils
+      - epel-release
+      - perl-Net-SNMP
+    nagios_code_location: /tmp/nagioscore.tar.gz
+    nagios_plugin_location: /tmp/nagios-plugins.tar.gz
+  become: yes
+  tasks:
+    - name: fail for unsupported os
+      fail:
+        msg: This playbook runs only on ubuntu
+      when: ansible_os_family != 'debian' or ansible_os_family != 'CentOS'
+    - name: install packages for ubuntu
+      apt:
+        name: "{{ item }}"
+        update_cache: yes
+        state: present
+      loop: "{{ packages_ubuntu }}"
+      tags:
+        - nagios
+      when: ansible_os_family == "Ubuntu"
+      
+    - name: install packages for CentOS
+      yum:
+        name: "{{ item }}"
+        update_cache: yes
+        state: present
+      loop: "{{ packages_centos }}"
+      tags:
+        - nagios
+      when: ansible_distribution == "CentOS"   
+    
+    - name: Download the source to temp folder
+      get_url:
+        dest: "{{ nagios_code_location }}"
+        url: "https://github.com/NagiosEnterprises/nagioscore/archive/nagios-{{ nagios_version }}.tar.gz"
+      tags:
+        - nagios
+    - name: untar the code
+      unarchive:
+        src: "{{ nagios_code_location }}"
+        dest: "/tmp/"
+      tags:
+        - nagios
+    - name: Compile Code for Ubuntu
+      shell:
+        cmd: sudo ./configure --with-httpd-conf=/etc/apache2/sites-enabled > configure.log && sudo make all > makeoutput.log
+      args:
+        chdir: "/tmp/nagioscore-nagios-{{ nagios_version }}/"
+      tags:
+        - nagios
+      when: ansible_os_family == "Ubuntu" 
+    - name: Compile Code for CentOS
+      shell:
+        cmd: sudo ./configure > configure.log && sudo make all > makeoutput.log
+      args:
+        chdir: "/tmp/nagioscore-nagios-{{ nagios_version }}/"
+      tags:
+        - nagios
+      when: ansible_distribution == "CentOS"  
+    - name: Create User and Group
+      shell:
+        cmd: sudo make install-groups-users > installgroups.log && sudo usermod -a -G nagios www-data > usermod.log
+      args:
+        chdir: "/tmp/nagioscore-nagios-{{ nagios_version }}/"
+      tags:
+        - nagios
+    - name: Install Binaries
+      shell:
+        cmd: sudo make install > makeinstall.log
+      args:
+        chdir: "/tmp/nagioscore-nagios-{{ nagios_version }}/"
+      tags:
+        - nagios
+    - name: Install Service / Daemon
+      shell:
+        cmd: sudo make install-daemoninit > daemoninit.log
+      args:
+        chdir: "/tmp/nagioscore-nagios-{{ nagios_version }}/"
+      tags:
+        - nagios
+    - name: Install Command Mode
+      shell:
+        cmd: sudo make install-commandmode > commandmode.log
+      args:
+        chdir: "/tmp/nagioscore-nagios-{{ nagios_version }}/"
+      tags:
+        - nagios
+    - name: Install Configuration Files
+      shell:
+        cmd: sudo make install-config > config.log
+      args:
+        chdir: "/tmp/nagioscore-nagios-{{ nagios_version }}/"
+      tags:
+        - nagios
+    
+    - name: Install Apache Config Files for Ubuntu
+      shell:
+        cmd: sudo make install-webconf > webconf.log && sudo a2enmod rewrite > a2enmodrewrite.log && sudo a2enmod cgi > cgi.log
+      args:
+        chdir: "/tmp/nagioscore-nagios-{{ nagios_version }}/"
+      tags:
+        - nagios
+      when: ansible_os_family == "Ubuntu"
+    
+    - name: Install Apache Config Files for centos
+      shell:
+        cmd: sudo make install-webconf > webconf.log 
+      args:
+        chdir: "/tmp/nagioscore-nagios-{{ nagios_version }}/"
+      tags:
+        - nagios
+      when: ansible_distribution == "CentOS" 
+      
+    - name: Install latest passlib with pip
+      pip: name=passlib
+      tags:
+        - nagios
+    
+    - name: Create nagiosadmin user account
+      htpasswd:
+        path: /usr/local/nagios/etc/htpasswd.users # required. Path to the file that contains the usernames and passwords
+        name: nagiosadmin # required. User name to add or remove
+        password: nagiosadmin # not required. Password associated with user.,Must be specified if user does not exist yet.
+      tags:
+        - nagios
+    
+    - name: start apache for Ubuntu
+      service:
+        name: apache2
+        state: started
+        enabled: true
+      tags:
+        - nagios
+      when: ansible_os_family == "Ubuntu"
+
+    - name: start apache for centos
+      service:
+        name: httpd
+        state: started
+        enabled: true
+      tags:
+        - nagios
+      when: ansible_distribution == "CentOS"
+      
+    - name: start nagios
+      service:
+        name: nagios
+        state: started
+        enabled: true
+      tags:
+        - nagios
+    
+    - name: Download the plugin to temp folder
+      get_url:
+        dest: "{{ nagios_plugin_location }}"
+        url: "https://github.com/nagios-plugins/nagios-plugins/archive/release-{{ nagios_plugin_version }}.tar.gz"
+      tags:
+        - plugin
+    - name: untar the plugin code
+      unarchive:
+        src: "{{ nagios_plugin_location }}"
+        dest: "/tmp/"
+      tags:
+        - plugin
+    - name: Compile + Install
+      shell:
+        cmd: sudo ./tools/setup > setup.log && sudo ./configure > configue.log && sudo make > make.log && sudo make install
+      args:
+        chdir: "/tmp/nagios-plugins-release-{{ nagios_plugin_version }}/"
+      tags:
+        - plugin
+      notify: 
+        - "restart nagios"
+        - "restart apache"
+        - "restart httpd"
+  handlers:
+    - name: restart nagios
+      service:
+        name: nagios
+        state: restarted
+      tags:
+        - plugin
+      listen: restart nagios
+    - name: restart apache
+      service:
+        name: apache2
+        state: restarted
+      tags:
+        - plugin
+      listen: restart apache
+      when: ansible_os_family == "Ubuntu"
+    - name: restart httpd
+      service:
+        name: httpd
+        state: restarted
+      tags:
+        - plugin
+      listen: restart httpd
+      when: ansible_distribution == "CentOS"
+
+          
